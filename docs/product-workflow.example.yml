@@ -1,5 +1,5 @@
 # Copy ONLY into an authorised product repository; do not modify the organiser target.
-# Replace YOUR_TEAM/YOUR_AGENT and FULL_TRUSTED_AGENT_COMMIT_SHA in both locations.
+# Agent pinned to the published implementation. Update both refs after reviewing a new release.
 name: Product security
 on:
   push:
@@ -12,10 +12,10 @@ concurrency:
 jobs:
   security:
     # Fork PRs have no API secret and fail closed until a trusted review is arranged.
-    uses: YOUR_TEAM/YOUR_AGENT/.github/workflows/reusable-security.yml@FULL_TRUSTED_AGENT_COMMIT_SHA
+    uses: nureek2001/aiagentcheck/.github/workflows/reusable-security.yml@5e48ee06614991b1259cfedbcd8c0bc38494f33f
     with:
-      agent_repository: YOUR_TEAM/YOUR_AGENT
-      agent_ref: FULL_TRUSTED_AGENT_COMMIT_SHA
+      agent_repository: nureek2001/aiagentcheck
+      agent_ref: 5e48ee06614991b1259cfedbcd8c0bc38494f33f
       target_repository: ${{ github.repository }}
       target_ref: ${{ github.sha }}
     secrets:
