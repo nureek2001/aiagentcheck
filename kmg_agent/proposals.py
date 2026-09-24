@@ -108,7 +108,7 @@ def propose(repo, report_path, finding_id, output, settings, redactor, client=No
             if len(doc.text) < 30000:
                 paths.add(path)
     documents = {
-        p: project.documents[p].text
+        p: project.documents[p].text.replace("\r\n", "\n")
         for p in sorted(paths)
         if p in project.documents
         and project.documents[p].kind != "docx"

@@ -40,7 +40,7 @@ def publish(repo, proposal_dir, expected_hash, timeout=2100):
     if project.commit != proposal['commit'] or project.fingerprint != proposal['source_fingerprint']:
         raise AnalysisError('Target changed since proposal; generate a fresh assessment')
     edits = proposal.get('edits', [])
-    documents = {e['path']: project.documents[e['path']].text for e in edits}
+    documents = {e['path']: project.documents[e['path']].text.replace('\r\n', '\n') for e in edits}
     if not edits or build_patch(documents, edits) != patch:
         raise AnalysisError('Patch does not match reviewed structured edits')
     for path in documents:
@@ -56,7 +56,7 @@ def publish(repo, proposal_dir, expected_hash, timeout=2100):
     with httpx.Client(timeout=30, trust_env=False, headers={'Authorization': 'Bearer ' + token,
                                                          'Accept': 'application/vnd.github+json'}) as client:
         def api(method, suffix, body=None):
-            r = client.request(method, f'https://api.github.com/repos/{repo_name}/{suffix}', json=body)
+            r = client.request(method, f'https://api.github.com/repos/{repo_name}' + ('/' + suffix if suffix else ''), json=body)
             if r.status_code not in (200, 201, 202):
                 raise AnalysisError(f'GitHub operation failed: HTTP {r.status_code}')
             return r.json()
@@ -72,7 +72,10 @@ def publish(repo, proposal_dir, expected_hash, timeout=2100):
                 for start, e in reversed(changes):
                     changed = changed[:start] + e['after'] + changed[start + len(e['before']):]
                 blob = api('POST', 'git/blobs', {'content': changed, 'encoding': 'utf-8'})
-                blobs.append({'path': path, 'mode': '100644', 'type': 'blob', 'sha': blob['sha']})
+                mode = subprocess.check_output(['git', '-C', str(repo), 'ls-files', '--stage', '--', path], text=True).split()[0]
+                if mode not in {'100644', '100755'}:
+                    raise AnalysisError('Only regular tracked files may be published')
+                blobs.append({'path': path, 'mode': mode, 'type': 'blob', 'sha': blob['sha']})
             tree = api('POST', 'git/trees', {'base_tree': api('GET', 'git/commits/' + project.commit)['tree']['sha'], 'tree': blobs})
             commit = api('POST', 'git/commits', {'message': 'Security fix proposal: ' + proposal['finding_id'],
                                                 'tree': tree['sha'], 'parents': [project.commit]})

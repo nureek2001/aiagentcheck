@@ -86,3 +86,51 @@ def test_telemetry_excludes_source_and_model_text(monkeypatch):
                           'message': 'SECRET-SOURCE', 'source': 'SECRET-SOURCE'})
     assert 'SECRET-SOURCE' not in json.dumps(bodies)
     assert '"completed": 3' in bodies[0]['output']['summary']
+
+@pytest.mark.parametrize('checks_pass,draft', [(True, False), (False, True)])
+def test_publish_isolated_branch_then_ci_then_pr(repo, tmp_path, monkeypatch, checks_pass, draft):
+    from kmg_agent.project import inspect_project
+    from kmg_agent.proposals import build_patch
+    import subprocess
+    project = inspect_project(repo, Redactor())
+    subprocess.run(['git', '-C', str(repo), 'remote', 'add', 'origin', 'https://github.com/team/product.git'], check=True)
+    original = project.documents['app.py'].text.replace('\r\n', '\n')
+    edits = [{'path': 'app.py', 'before': "'administrator'", 'after': "'admin'", 'reason': 'Synthetic edit only'}]
+    patch = build_patch({'app.py': original}, edits)
+    output = tmp_path / 'proposal'
+    output.mkdir()
+    (output / 'proposal.patch').write_text(patch, encoding='utf-8', newline='\n')
+    (output / 'proposal.json').write_text(json.dumps({'commit': project.commit, 'source_fingerprint': project.fingerprint,
+        'edits': edits, 'finding_id': 'fixture', 'summary': 'Synthetic test', 'changes': [{'path': 'app.py', 'reason': 'fixture'}]}))
+    calls = []
+    def api(request):
+        calls.append((request.method, request.url.path))
+        path = request.url.path
+        if path.endswith('/team/product'):
+            result = {'default_branch': 'main'}
+        elif '/git/ref/heads/' in path:
+            result = {'object': {'sha': project.commit}}
+        elif '/git/commits/' in path:
+            result = {'tree': {'sha': 'base-tree'}}
+        elif path.endswith('/git/commits'):
+            result = {'sha': 'a' * 40}
+        elif path.endswith('/git/refs'):
+            result = {}
+        elif path.endswith('/actions/runs'):
+            result = {'workflow_runs': [{'id': 12, 'status': 'completed', 'path': '.github/workflows/security.yml', 'event': 'push', 'html_url': 'https://github.com/team/product/actions/runs/12'}]}
+        elif path.endswith('/jobs'):
+            result = {'jobs': [{'name': n, 'conclusion': 'success' if checks_pass else 'failure'} for n in ['Product tests', 'security / Required security gate']]}
+        elif path.endswith('/pulls'):
+            assert json.loads(request.content)['draft'] == draft
+            assert any(p.endswith('/jobs') for _, p in calls)
+            result = {'html_url': 'https://github.com/team/product/pull/1'}
+        else:
+            result = {'sha': 'fixture-tree-or-blob'}
+        return httpx.Response(200, json=result)
+    monkeypatch.setattr('kmg_agent.pull_requests.github_token', lambda: 'fixture-token')
+    real = httpx.Client
+    monkeypatch.setattr('kmg_agent.pull_requests.httpx.Client', lambda **kw: real(transport=httpx.MockTransport(api), **kw))
+    result = publish(repo, output, hashlib.sha256(patch.encode()).hexdigest())
+    assert result['status'] == ('draft_pr' if draft else 'ready_pr')
+    assert (repo / 'app.py').read_text() == original
+    assert inspect_project(repo, Redactor()).commit == project.commit

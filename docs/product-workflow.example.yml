@@ -29,6 +29,7 @@ jobs:
         run: python -m pip install -r requirements.txt
       - name: Run product tests
         env:
+          PYTHONUTF8: "1"
           HELPDESK_RUNTIME: ${{ runner.temp }}\helpdesk-validation
         run: |
           python setup_local.py --keys-only
@@ -38,10 +39,10 @@ jobs:
     # Push already audits same-repository branches; avoid a second paid scan when opening a PR.
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     # Fork PRs have no API secret and fail closed until a trusted review is arranged.
-    uses: nureek2001/aiagentcheck/.github/workflows/reusable-security.yml@ed01e9534ff089522a08495cf4c9ce1c98f308c6
+    uses: nureek2001/aiagentcheck/.github/workflows/reusable-security.yml@f01bb3e629498d92257cf441b12e81b52e401946
     with:
       agent_repository: nureek2001/aiagentcheck
-      agent_ref: ed01e9534ff089522a08495cf4c9ce1c98f308c6
+      agent_ref: f01bb3e629498d92257cf441b12e81b52e401946
       target_repository: ${{ github.repository }}
       target_ref: ${{ github.sha }}
     secrets:

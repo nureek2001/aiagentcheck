@@ -122,6 +122,7 @@ class Dashboard:
         self.env_file = env_file.resolve()
         self.csrf = secrets.token_urlsafe(32)
         self.lock, self.process = threading.Lock(), None
+        self.scan_destination = None
         self.budget_settings = read_json(self.reports / '.budget-settings.json', {"max_tokens": 8000000, "max_requests": 250})
 
     def directory(self, name):
@@ -144,6 +145,9 @@ class Dashboard:
         )[:60]
         runs = [assessment(d) for d in directories]
         runs = [r for r in runs if r["report"] or r["error"] or r["progress"] or r["proposal"]]
+        if self.scan_destination and self.process is not None and self.process.poll() is None and not any(r['id'] == self.scan_destination for r in runs):
+            runs.insert(0, {'id': self.scan_destination, 'report': None, 'final': False, 'error': None,
+                           'proposal': None, 'files': [], 'progress': {'stage': 'inventory', 'status': 'running', 'message': 'Preparing scan'}})
         return {
             "runs": runs,
             "github": read_json(self.reports / "github-state.json"),
@@ -213,6 +217,7 @@ class Dashboard:
             if self.process is not None and self.process.poll() is None:
                 raise ValueError('A task is already running')
             destination = self.reports / ('run-' + datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S') + '-' + secrets.token_hex(3))
+            self.scan_destination = destination.name
             with (self.reports / '.scan.log').open('w', encoding='utf-8') as log:
                 self.process = subprocess.Popen([sys.executable, '-m', 'kmg_agent', 'scan', '--repo', str(self.repo),
                     '--output', str(destination), '--env-file', str(self.env_file), '--no-cache'],

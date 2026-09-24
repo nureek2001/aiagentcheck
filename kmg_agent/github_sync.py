@@ -143,6 +143,7 @@ class GitHubSync:
                     "run_attempt",
                 )
             }
+            item["repository"] = self.repository
             item["steps"] = []
             if run["status"] != "completed":
                 jobs = self.api(f"actions/runs/{run['id']}/jobs?per_page=30").json()["jobs"]

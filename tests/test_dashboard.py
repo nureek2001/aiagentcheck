@@ -120,3 +120,21 @@ def test_invalid_report_artifact_is_rejected_before_writes(tmp_path):
     with pytest.raises(jsonschema.ValidationError):
         unpack_artifact(data.getvalue(), tmp_path / "import", Redactor())
     assert not (tmp_path / "import").exists()
+
+
+def test_budget_updates_need_csrf_and_validate_bounds(server):
+    app, client = server
+    assert client.post('/api/budget', json={'max_tokens': 1000, 'max_requests': 1}).status_code == 403
+    headers = {'Origin': str(client.base_url).rstrip('/'), 'X-CSRF-Token': app.csrf}
+    assert client.post('/api/budget', headers=headers, json={'max_tokens': True, 'max_requests': 1}).status_code == 400
+    assert client.post('/api/budget', headers=headers, json={'max_tokens': 500000, 'max_requests': 20}).status_code == 200
+    assert app.budget_settings == {'max_tokens': 500000, 'max_requests': 20}
+    assert app.process is None
+
+
+def test_scan_and_publication_require_distinct_explicit_confirmation(server):
+    app, client = server
+    headers = {'Origin': str(client.base_url).rstrip('/'), 'X-CSRF-Token': app.csrf}
+    assert client.post('/api/scan', headers=headers, json={}).status_code == 400
+    assert client.post('/api/publish', headers=headers, json={'confirm_paid_request': True}).status_code == 400
+    assert app.process is None
