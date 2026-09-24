@@ -12,3 +12,4 @@ dist/
 reports/
 targets/
 *.log
+reports-*/

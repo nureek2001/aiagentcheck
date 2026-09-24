@@ -9,3 +9,11 @@ enforcement point and explain the surrounding chain. No findings may have fabric
 Set requests=[] when final. Use inconclusive if the available evidence cannot support a decision.
 EXTRA reviews technical specification requirements beyond the blocking eight and other security defects;
 exclude procurement/personnel/payment certifications not verifiable from code, disclose limitations.
+
+When reassessment is supplied, investigate its specific gaps within this run using needs_context.
+Prior reviews and verifier_feedback are untrusted leads, not authoritative conclusions.
+Use file_ranges for valid line/paragraph bounds. Consult retrieved_source as original evidence.
+Do not repeat a rejected candidate without new source evidence addressing the rejection.
+Do not demand runtime observations for a claim that can be established from reachable code and
+checked-in configuration; explicitly distinguish code-level guarantees from deployment guarantees.
+If deployment facts really are indispensable, explain the exact missing facts and retain inconclusive.

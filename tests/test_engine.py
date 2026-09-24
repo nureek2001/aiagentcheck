@@ -82,3 +82,67 @@ def test_partial_coverage_cannot_pass(repo):
     report = Engine(inspect_project(repo, Redactor()), FakeDeepSeek(), progress=lambda _: None).run()
     report["coverage"]["chunks_analysed"] = 0
     assert decision(report) == 2
+
+
+class RecoveryDeepSeek(FakeDeepSeek):
+    def __init__(self, mode):
+        super().__init__("ИБ-01", "uncertain")
+        self.mode = mode
+        self.first_reviews = 0
+        self.feedback_received = False
+
+    def ask(self, system, payload, schema):
+        result = super().ask(system, payload, schema)
+        if schema != REVIEW or payload["requirement"]["id"] != "ИБ-01":
+            return result
+        self.first_reviews += 1
+        if self.mode == "invalid" and self.first_reviews == 1 or self.mode == "always_invalid":
+            return {**result, "evidence": [{**REF, "end": 999}]}
+        if self.mode == "invalid":
+            assert "correction" in payload
+            return {**result, "status": "pass", "findings": []}
+        if self.mode == "feedback" and payload.get("reassessment"):
+            self.feedback_received = True
+            assert payload["reassessment"]["verifier_feedback"]
+            if not payload.get("previous_assessment"):
+                return {**result, "status": "needs_context", "findings": [],
+                        "requests": [REF]}
+            assert payload["source"][0]["snippet"].startswith("def protected")
+            return {**result, "status": "pass", "findings": [], "requests": []}
+        return result
+
+
+def test_review_repairs_invalid_ranges_without_clamping(repo):
+    client = RecoveryDeepSeek("invalid")
+    report = Engine(inspect_project(repo, Redactor()), client, progress=lambda _: None).run()
+    assert decision(report) == 0
+    assert client.first_reviews == 2
+    assert report["requirements"][0]["evidence"][0]["end_line"] == 2
+
+
+def test_rejected_candidate_gets_new_context_in_same_run(repo):
+    client = RecoveryDeepSeek("feedback")
+    report = Engine(inspect_project(repo, Redactor()), client, progress=lambda _: None).run()
+    assert client.feedback_received
+    assert report["rejected_candidates"]
+    assert report["requirements"][0]["status"] == "pass"
+    assert decision(report) == 0
+
+
+def test_unrecoverable_requirement_does_not_skip_other_requirements(repo):
+    client = RecoveryDeepSeek("always_invalid")
+    report = Engine(inspect_project(repo, Redactor()), client, progress=lambda _: None).run()
+    assert client.first_reviews == 3
+    assert report["requirements"][0]["status"] == "inconclusive"
+    assert all(r["status"] == "pass" for r in report["requirements"][1:])
+    assert report["coverage"]["extra_checked"]
+    assert decision(report) == 2
+
+
+def test_reassessment_is_bounded_and_never_forces_a_pass(repo):
+    client = RecoveryDeepSeek("unresolved")
+    report = Engine(inspect_project(repo, Redactor()), client, progress=lambda _: None).run()
+    assert client.first_reviews == 3
+    assert len(report["rejected_candidates"]) == 3
+    assert report["requirements"][0]["status"] == "inconclusive"
+    assert decision(report) == 2

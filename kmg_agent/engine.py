@@ -118,7 +118,18 @@ class Engine:
         for requirement in catalogue():
             self.check_time()
             self.progress(f"Review {requirement['id']}")
-            self.review(requirement)
+            try:
+                self.review(requirement)
+            except AnalysisError as exc:
+                # A model response failure for one requirement must not skip the others.
+                rid = requirement["id"]
+                reason = f"Проверка {rid} не завершена после попыток восстановления: {exc}"
+                if rid == "EXTRA":
+                    self.report["limitations"].append(reason)
+                else:
+                    entry = next(r for r in self.report["requirements"] if r["id"] == rid)
+                    entry.update(status="inconclusive", reason=reason)
+                self.progress(reason)
             self.save()
         self.report["exit_code"] = decision(self.report)
         return self.report
@@ -222,7 +233,55 @@ class Engine:
                 }
         raise AnalysisError("Evidence repair exhausted")
 
-    def review(self, requirement):
+    def request_review(self, payload):
+        """Bound retrieval and repair separately; never clamp invented evidence ranges."""
+        corrections = 0
+        retrievals = 0
+        while True:
+            self.check_time()
+            result = self.client.ask(self.system + resource("review.md"), payload, REVIEW)
+            try:
+                for ref in result["evidence"]:
+                    self.project.evidence(ref)
+                for finding in result["findings"]:
+                    self.project.context(finding["evidence"])
+                if result["status"] == "needs_context":
+                    if not result["requests"]:
+                        raise AnalysisError("Model requested context without specifying ranges")
+                    requested = self.project.context(result["requests"])
+                    if retrievals >= 4:
+                        return {**result, "status": "inconclusive", "reason":
+                                "Source retrieval budget exhausted. " + result["reason"]}
+                    retrievals += 1
+                    # Accumulate requested sources so a later request cannot discard prior evidence.
+                    merged = {dump_context(e): e for e in payload["source"] + requested}
+                    candidate = {**payload, "source": list(merged.values())}
+                    if len(dump_context(candidate)) > self.client.settings.context_chars - 12000:
+                        raise AnalysisError("Requested sources exceed context budget; request narrower ranges")
+                    payload.update(candidate)
+                    payload["previous_assessment"] = {"reason": result["reason"]}
+                    continue
+                if result["requests"]:
+                    raise AnalysisError("Final assessment contains unresolved source requests")
+                if result["status"] == "pass" and (not result["evidence"] or result["findings"]):
+                    raise AnalysisError("A pass requires positive evidence and no findings")
+                if result["status"] == "fail" and not result["findings"]:
+                    raise AnalysisError("A failure requires findings")
+                return result
+            except AnalysisError as exc:
+                if corrections >= 2:
+                    raise
+                corrections += 1
+                payload["correction"] = {
+                    "error": str(exc),
+                    "previous_assessment": result,
+                    "instruction": "Correct the invalid references or assessment. Use the file_ranges "
+                    "catalogue and actual source. Never invent or clamp line numbers. Request valid "
+                    "source ranges with needs_context if evidence is missing.",
+                }
+                self.progress(f"Review {payload['requirement']['id']} — исправление доказательств {corrections}/2")
+
+    def review(self, requirement, recovery=0, feedback=None):
         rid = requirement["id"]
         observations = [o for o in self.observations if o["requirement"] == rid]
         # All per-requirement map observations are retained. Original source is budgeted and retrievable.
@@ -238,7 +297,13 @@ class Engine:
             },
             "observations": observations,
             "source": [],
+            "file_ranges": [
+                {"path": path, "start": 1, "end": len(doc.lines()), "kind": doc.kind}
+                for path, doc in self.project.documents.items()
+            ],
         }
+        if feedback:
+            payload["reassessment"] = feedback
         if rid == "EXTRA":
             payload["already_reported_mandatory_findings"] = [
                 {k: f[k] for k in ("requirement", "title", "root_cause")} for f in self.report["findings"]
@@ -289,22 +354,7 @@ class Engine:
                     < self.client.settings.context_chars - 120000
                 ):
                     payload["source"].append(evidence)
-        result = None
-        for _ in range(4):
-            self.check_time()
-            result = self.client.ask(self.system + resource("review.md"), payload, REVIEW)
-            if result["status"] != "needs_context":
-                if result["requests"]:
-                    raise AnalysisError("Final assessment contains unresolved source requests")
-                break
-            if not result["requests"]:
-                raise AnalysisError("Model requested context without specifying ranges")
-            requested = self.project.context(result["requests"])
-            # Replacing source keeps full observations and ensures requested evidence fits without silent truncation.
-            payload["source"] = requested
-            payload["previous_assessment"] = {"reason": result["reason"]}
-        if result["status"] == "needs_context":
-            result["status"] = "inconclusive"
+        result = self.request_review(payload)
         references = self.project.context(result["evidence"])
         if result["status"] == "pass" and (not references or result["findings"]):
             raise AnalysisError("A pass requires positive evidence and no findings")
@@ -324,6 +374,8 @@ class Engine:
                 ],
                 "finding": item,
                 "finding_source": evidence,
+                "retrieved_source": payload["source"],
+                "file_ranges": payload["file_ranges"],
             }
             verification = self.client.ask(
                 self.system + resource("verify.md"),
@@ -339,7 +391,7 @@ class Engine:
                         "reason": verification["reason"],
                     }
                 )
-                # Rejection of a finding is not proof of compliance. Require a fresh review next run.
+                # Rejection is not compliance: reassess with feedback within this run.
                 uncertain = True
                 continue
             primary = item["evidence"][0]
@@ -357,12 +409,25 @@ class Engine:
         # One confirmed violation proves noncompliance even if a separate candidate was rejected.
         # Without a confirmed violation, rejected/uncertain candidates still cannot imply a pass.
         status = "fail" if confirmed else ("inconclusive" if uncertain else result["status"])
+        if status == "inconclusive" and recovery < 2:
+            self.progress(f"Review {rid} — дополнительная проверка {recovery + 1}/2")
+            return self.review(requirement, recovery + 1, {
+                "previous_assessment": result,
+                "verifier_feedback": [r for r in self.report["rejected_candidates"] if r["requirement"] == rid],
+                "retrieved_source": payload["source"],
+                "instruction": "Resolve the specific evidence gaps. Request configuration, connected "
+                "call sites and enforcement source with needs_context. Verifier opinions can be wrong: "
+                "check them against actual snippets, not authority. A rejected finding is not a pass. "
+                "Give pass only with positive enforcement evidence; retain inconclusive if facts "
+                "outside the repository are indispensable. Never force a binary verdict.",
+            })
         assessment_reason = result["reason"]
         if status == "fail":
             assessment_reason = "Подтверждённые нарушения: " + "; ".join(f["title"] for f in confirmed)
         elif status == "inconclusive" and uncertain:
             assessment_reason = (
                 "Недостаточно подтверждённых доказательств для окончательного вывода. "
+                + result["reason"] + " "
                 + " ".join(r["reason"] for r in self.report["rejected_candidates"] if r["requirement"] == rid)
             )
         if rid == "EXTRA":

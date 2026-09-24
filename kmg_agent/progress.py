@@ -8,7 +8,12 @@ from .reporting import write_json
 class Progress:
     def __init__(self, output, redactor):
         self.output, self.redactor = output, redactor
-        self.state = {"stage": "inventory", "message": "Сбор файлов", "status": "running"}
+        self.state = {
+            "stage": "inventory",
+            "message": "Сбор файлов",
+            "status": "running",
+            "started_at": datetime.now(timezone.utc).isoformat(),
+        }
 
     def emit(self, message, **values):
         self.state.update(values, message=message, updated_at=datetime.now(timezone.utc).isoformat())

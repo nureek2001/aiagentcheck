@@ -138,6 +138,7 @@ class GitHubSync:
                     "head_branch",
                     "html_url",
                     "created_at",
+                    "run_started_at",
                     "run_attempt",
                 )
             }
