@@ -110,4 +110,4 @@ def publish(repo, proposal_dir, expected_hash, timeout=2100):
             return operation
         except Exception as exc:
             save(status='error', message=str(exc) if isinstance(exc, AnalysisError) else 'Publication failed; inspect branch before retrying')
-            raise
+            raise AnalysisError(operation['message']) from None

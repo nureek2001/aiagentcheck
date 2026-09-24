@@ -72,12 +72,15 @@ def assessment(directory):
         except (KeyError, ValueError):
             pass
     proposal = read_json(directory / "proposal.json")
+    full_patch = ""
     if proposal:
         try:
-            proposal["diff"] = (directory / "proposal.patch").read_text(encoding="utf-8")[:200000]
+            full_patch = (directory / "proposal.patch").read_text(encoding="utf-8")
+            proposal["diff"] = full_patch[:200000]
+            proposal["diff_truncated"] = len(full_patch) > 200000
         except OSError:
             proposal["diff"] = ""
-    patch_hash = hashlib.sha256(proposal.get("diff", "").encode()).hexdigest() if proposal else None
+    patch_hash = hashlib.sha256(full_patch.encode()).hexdigest() if proposal else None
     return {
         "budget": read_json(directory / "budget.json"),
         "pr": read_json(directory / "pr.json"),
@@ -153,6 +156,7 @@ class Dashboard:
             "github": read_json(self.reports / "github-state.json"),
             "can_propose": bool(self.repo and os.environ.get("DEEPSEEK_API_KEY")),
             "proposal_busy": self.process is not None and self.process.poll() is None,
+            "benchmark": read_json(self.reports / "benchmark.json"),
             "budget_settings": self.budget_settings,
             "can_scan": bool(self.repo and os.environ.get("DEEPSEEK_API_KEY")),
             "can_publish": bool(self.repo),
