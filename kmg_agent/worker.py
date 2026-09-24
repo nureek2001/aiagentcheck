@@ -108,6 +108,7 @@ def main():
     finally:
         # Active threads may be completing network calls after one failed: parent deadline still applies.
         if client:
+            write_json(output / "budget.json", client.budget(), redactor)
             write_json(
                 output / "metrics.json",
                 {

@@ -7,7 +7,7 @@ import threading
 import httpx
 import jsonschema
 
-from .errors import AnalysisError, DeadlineError, ProviderError, OutputLimitError
+from .errors import AnalysisError, DeadlineError, ProviderError, OutputLimitError, BudgetError
 
 
 class DeepSeek:
@@ -15,7 +15,32 @@ class DeepSeek:
         self.settings, self.redactor, self.deadline = settings, redactor, deadline
         self.http = httpx.Client(transport=transport, follow_redirects=False, trust_env=False)
         self.lock = threading.Lock()
+        self.budget_used = 0
+        self.budget_reserved = 0
+        self.attempts = 0
         self.usage = {"requests": 0, "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+
+    def budget(self):
+        with self.lock:
+            return {"max_tokens": self.settings.max_tokens, "max_requests": self.settings.max_requests,
+                    "charged_or_estimated_tokens": self.budget_used, "reserved_tokens": self.budget_reserved,
+                    "attempts": self.attempts, "reported_tokens": self.usage["total_tokens"]}
+
+    def reserve(self, body):
+        # UTF-8 byte count plus output allowance is intentionally conservative, not a price estimate.
+        estimate = len(json.dumps(body["messages"], ensure_ascii=False).encode("utf-8")) + body["max_tokens"] + 1024
+        with self.lock:
+            if self.attempts >= self.settings.max_requests or self.budget_used + self.budget_reserved + estimate > self.settings.max_tokens:
+                raise BudgetError("API budget exhausted before the next request; assessment incomplete")
+            self.attempts += 1
+            self.usage["requests"] += 1
+            self.budget_reserved += estimate
+        return estimate
+
+    def settle(self, estimate, actual=None):
+        with self.lock:
+            self.budget_reserved -= estimate
+            self.budget_used += actual if actual is not None else estimate
 
     def close(self):
         self.http.close()
@@ -42,6 +67,7 @@ class DeepSeek:
             remaining = self.deadline - time.monotonic()
             if remaining <= 1:
                 raise DeadlineError("Overall analysis deadline reached")
+            estimate = self.reserve(body)
             try:
                 response = self.http.post(
                     self.settings.base_url + "/chat/completions",
@@ -50,11 +76,19 @@ class DeepSeek:
                     timeout=min(self.settings.request_timeout, remaining),
                 )
             except httpx.TransportError as exc:
+                self.settle(estimate)
                 if attempt == self.settings.retries:
                     raise ProviderError("DeepSeek network error or request timeout") from exc
             else:
-                with self.lock:
-                    self.usage["requests"] += 1
+                actual = None
+                if response.status_code == 200:
+                    try:
+                        reported = response.json().get("usage", {}).get("total_tokens")
+                        if isinstance(reported, int) and not isinstance(reported, bool) and reported >= 0:
+                            actual = reported
+                    except (ValueError, AttributeError):
+                        pass
+                self.settle(estimate, actual)
                 if response.status_code == 200:
                     try:
                         data = response.json()

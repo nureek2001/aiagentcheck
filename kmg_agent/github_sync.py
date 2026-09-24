@@ -24,6 +24,7 @@ ARTIFACT_FILES = {
     "execution.log",
     "error.json",
     "progress.json",
+    "budget.json",
 }
 MAX_ARCHIVE = 32 * 1024 * 1024
 
@@ -155,6 +156,18 @@ class GitHubSync:
                     for j in jobs
                     for s in j.get("steps", [])
                 ]
+                checks = self.api(f"commits/{run['head_sha']}/check-runs?check_name=KMG%20agent%20progress&per_page=100").json().get("check_runs", [])
+                for check in checks:
+                    if check.get("external_id") != str(run['id']) + ':' + str(run.get('run_attempt', 1)):
+                        continue
+                    summary = check.get('output', {}).get('summary', '')
+                    if summary.startswith('KMG_PROGRESS_V1\n') and len(summary) < 4096:
+                        try:
+                            telemetry = json.loads(summary.split('\n', 1)[1])
+                            if isinstance(telemetry, dict):
+                                item['telemetry'] = telemetry
+                        except ValueError:
+                            pass
             else:
                 directory = self.reports / f"github-{run['id']}-{run.get('run_attempt', 1)}"
                 marker = directory / ".synced.json"

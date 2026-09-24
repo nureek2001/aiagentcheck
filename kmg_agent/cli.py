@@ -28,6 +28,15 @@ def parser():
     dashboard.add_argument("--port", type=int, default=8765)
     export = sub.add_parser("dashboard-export", help="Standalone dashboard from existing results")
     export.add_argument("--output", type=Path, required=True, help="Existing assessment directory")
+    benchmark = sub.add_parser("benchmark", help="Run labelled security cases against DeepSeek")
+    benchmark.add_argument("--output", type=Path, required=True)
+    benchmark.add_argument("--env-file", type=Path, default=Path(".env"))
+    benchmark.add_argument("--live", action="store_true", required=True)
+    publish = sub.add_parser("publish-proposal", help="Publish explicitly approved patch; run CI and create PR")
+    publish.add_argument("--repo", type=Path, required=True)
+    publish.add_argument("--proposal", type=Path, required=True)
+    publish.add_argument("--patch-sha256", required=True)
+    publish.add_argument("--confirm", action="store_true", required=True)
     propose = sub.add_parser("propose", help="Suggest a patch without changing or executing target code")
     propose.add_argument("--repo", type=Path, required=True)
     propose.add_argument("--report", type=Path, required=True)
@@ -43,6 +52,8 @@ def parser():
         if name == "scan":
             command.add_argument("--env-file", type=Path, default=Path(".env"))
             command.add_argument("--timeout", type=int, default=1500, help="Total seconds, range 10..1740")
+            command.add_argument("--max-tokens", type=int, help="Total API token budget")
+            command.add_argument("--max-requests", type=int, help="Total API request attempts")
             command.add_argument("--workers", type=int, choices=range(1, 5), default=2)
             command.add_argument(
                 "--no-cache", action="store_true", help="Do not reuse prior context observations"
@@ -68,6 +79,9 @@ def run_scan(args, repo, output, redactor):
     if env_path.is_relative_to(repo):
         raise ValueError("Agent env-file must not be inside the target repository")
     load_env(env_path)
+    for key, name in (("DEEPSEEK_MAX_TOKENS", "max_tokens"), ("DEEPSEEK_MAX_REQUESTS", "max_requests")):
+        if getattr(args, name, None) is not None:
+            os.environ[key] = str(getattr(args, name))
     settings = Settings.from_env()
     redactor.known.add(settings.key)
     started = datetime.now(timezone.utc)
@@ -149,6 +163,20 @@ def run_scan(args, repo, output, redactor):
 
 def main(argv=None):
     args = parser().parse_args(argv)
+    if args.command == "benchmark":
+        from .benchmark import run_benchmark
+        load_env(args.env_file)
+        return run_benchmark(args.output)
+    if args.command == "publish-proposal":
+        from .pull_requests import publish
+        try:
+            print(json.dumps(publish(args.repo, args.proposal, args.patch_sha256)))
+            return 0
+        except (AgentError, OSError, ValueError) as exc:
+            if args.proposal.is_dir() and not (args.proposal / 'pr.json').exists():
+                write_json(args.proposal / 'pr.json', {'status': 'error', 'message': str(exc) if isinstance(exc, AgentError) else 'Publication input error'}, Redactor())
+            print("PR publication failed; inspect pr.json", file=sys.stderr)
+            return 2
     if args.command in {"dashboard", "dashboard-export", "propose"}:
         from .dashboard import command
 

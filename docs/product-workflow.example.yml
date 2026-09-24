@@ -3,14 +3,40 @@
 name: Product security
 on:
   push:
+  workflow_dispatch:
   pull_request:
 permissions:
   contents: read
+  checks: write
 concurrency:
   group: product-security-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 jobs:
+  tests:
+    name: Product tests
+    runs-on: windows-latest
+    timeout-minutes: 12
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+      - name: Install product dependencies (no API secrets)
+        run: python -m pip install -r requirements.txt
+      - name: Run product tests
+        env:
+          HELPDESK_RUNTIME: ${{ runner.temp }}\helpdesk-validation
+        run: |
+          python setup_local.py --keys-only
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python manage.py test portal --noinput
   security:
+    # Push already audits same-repository branches; avoid a second paid scan when opening a PR.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     # Fork PRs have no API secret and fail closed until a trusted review is arranged.
     uses: nureek2001/aiagentcheck/.github/workflows/reusable-security.yml@ed01e9534ff089522a08495cf4c9ce1c98f308c6
     with:
@@ -21,7 +47,7 @@ jobs:
     secrets:
       DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
   delivery:
-    needs: security
+    needs: [security, tests]
     runs-on: ubuntu-latest
     steps:
       - run: echo 'Replace with your authorised deployment steps.'

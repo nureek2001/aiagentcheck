@@ -16,3 +16,7 @@ class AnalysisError(AgentError):
 
 class OutputLimitError(AnalysisError):
     pass
+
+
+class BudgetError(DeadlineError):
+    pass

@@ -28,6 +28,8 @@ class Settings:
     retries: int = 2
     chunk_chars: int = 90000
     context_chars: int = 800000
+    max_tokens: int = 8000000
+    max_requests: int = 250
 
     @classmethod
     def from_env(cls):
@@ -37,6 +39,8 @@ class Settings:
             base_url=os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com").rstrip("/"),
             request_timeout=float(os.environ.get("DEEPSEEK_TIMEOUT", "120")),
             retries=int(os.environ.get("DEEPSEEK_RETRIES", "2")),
+            max_tokens=int(os.environ.get("DEEPSEEK_MAX_TOKENS", "8000000")),
+            max_requests=int(os.environ.get("DEEPSEEK_MAX_REQUESTS", "250")),
         )
         url = urlparse(value.base_url)
         if url.scheme != "https" or url.hostname != "api.deepseek.com" or url.username or url.password:
@@ -45,4 +49,6 @@ class Settings:
             raise ValueError("DEEPSEEK_API_KEY is empty; set it in .env or the environment")
         if not 1 <= value.request_timeout <= 300 or not 0 <= value.retries <= 4:
             raise ValueError("Invalid timeout or retry count")
+        if value.max_tokens < 1000 or not 1 <= value.max_requests <= 2000:
+            raise ValueError("Invalid API budget")
         return value

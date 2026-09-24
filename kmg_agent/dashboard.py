@@ -1,5 +1,6 @@
 """Loopback dashboard and portable CI artifact, with explicit opt-in proposals."""
 
+import hashlib
 import hmac
 import json
 import os
@@ -30,6 +31,8 @@ DOWNLOADS = {
     "proposal.json",
     "proposal.patch",
     "dashboard.html",
+    "budget.json",
+    "pr.json",
 }
 
 
@@ -74,7 +77,11 @@ def assessment(directory):
             proposal["diff"] = (directory / "proposal.patch").read_text(encoding="utf-8")[:200000]
         except OSError:
             proposal["diff"] = ""
+    patch_hash = hashlib.sha256(proposal.get("diff", "").encode()).hexdigest() if proposal else None
     return {
+        "budget": read_json(directory / "budget.json"),
+        "pr": read_json(directory / "pr.json"),
+        "patch_sha256": patch_hash,
         "id": directory.name,
         "report": result,
         "final": report is not None,
@@ -115,6 +122,7 @@ class Dashboard:
         self.env_file = env_file.resolve()
         self.csrf = secrets.token_urlsafe(32)
         self.lock, self.process = threading.Lock(), None
+        self.budget_settings = read_json(self.reports / '.budget-settings.json', {"max_tokens": 8000000, "max_requests": 250})
 
     def directory(self, name):
         if not re.fullmatch(r"[A-Za-z0-9_.-]{1,160}", name) or name.startswith("."):
@@ -141,6 +149,9 @@ class Dashboard:
             "github": read_json(self.reports / "github-state.json"),
             "can_propose": bool(self.repo and os.environ.get("DEEPSEEK_API_KEY")),
             "proposal_busy": self.process is not None and self.process.poll() is None,
+            "budget_settings": self.budget_settings,
+            "can_scan": bool(self.repo and os.environ.get("DEEPSEEK_API_KEY")),
+            "can_publish": bool(self.repo),
             "csrf": self.csrf,
             "live": True,
         }
@@ -177,9 +188,51 @@ class Dashboard:
                     ],
                     stdout=log,
                     stderr=log,
-                    env={**os.environ, "PYTHONUTF8": "1"},
+                    env=self.child_env(),
                 )
             return destination.name
+
+    def child_env(self):
+        return {**os.environ, "PYTHONUTF8": "1",
+                "DEEPSEEK_MAX_TOKENS": str(self.budget_settings["max_tokens"]),
+                "DEEPSEEK_MAX_REQUESTS": str(self.budget_settings["max_requests"])}
+
+    def set_budget(self, data):
+        tokens, requests = data.get('max_tokens'), data.get('max_requests')
+        if type(tokens) is not int or type(requests) is not int or not 1000 <= tokens <= 50000000 or not 1 <= requests <= 2000:
+            raise ValueError('Invalid budget')
+        from .reporting import write_json
+        self.budget_settings = {'max_tokens': tokens, 'max_requests': requests}
+        write_json(self.reports / '.budget-settings.json', self.budget_settings, Redactor())
+        return self.budget_settings
+
+    def start_scan(self):
+        if not self.repo:
+            raise ValueError('Local target required')
+        with self.lock:
+            if self.process is not None and self.process.poll() is None:
+                raise ValueError('A task is already running')
+            destination = self.reports / ('run-' + datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S') + '-' + secrets.token_hex(3))
+            with (self.reports / '.scan.log').open('w', encoding='utf-8') as log:
+                self.process = subprocess.Popen([sys.executable, '-m', 'kmg_agent', 'scan', '--repo', str(self.repo),
+                    '--output', str(destination), '--env-file', str(self.env_file), '--no-cache'],
+                    stdout=log, stderr=log, env=self.child_env())
+            return destination.name
+
+    def start_publish(self, name, patch_hash):
+        if not self.repo:
+            raise ValueError('Local target required')
+        directory = self.directory(name)
+        if hashlib.sha256((directory / 'proposal.patch').read_text(encoding='utf-8').encode()).hexdigest() != patch_hash:
+            raise ValueError('Patch changed')
+        with self.lock:
+            if self.process is not None and self.process.poll() is None:
+                raise ValueError('A task is already running')
+            with (directory / 'publication.log').open('w', encoding='utf-8') as log:
+                self.process = subprocess.Popen([sys.executable, '-m', 'kmg_agent', 'publish-proposal',
+                    '--repo', str(self.repo), '--proposal', str(directory), '--patch-sha256', patch_hash, '--confirm'],
+                    stdout=log, stderr=log, env=self.child_env())
+            return name
 
 
 def handler(app):
@@ -256,12 +309,20 @@ def handler(app):
                 return
             try:
                 length = int(self.headers.get("Content-Length", "0"))
-                if self.path != "/api/propose" or not 0 < length < 4096:
+                if self.path not in {"/api/propose", "/api/scan", "/api/budget", "/api/publish"} or not 0 < length < 4096:
                     raise ValueError("Invalid proposal request")
                 data = json.loads(self.rfile.read(length))
+                if self.path == '/api/budget':
+                    self.respond(200, json.dumps(app.set_budget(data)))
+                    return
+                if self.path == '/api/publish':
+                    if data.get('confirm_push_tests_paid_rescan') is not True:
+                        raise ValueError('Explicit publication confirmation required')
+                    self.respond(202, json.dumps({'run': app.start_publish(data['run'], data['patch_sha256'])}))
+                    return
                 if data.get("confirm_paid_request") is not True:
                     raise ValueError("Explicit paid request confirmation required")
-                run = app.start_proposal(data["run"], data["finding"])
+                run = app.start_scan() if self.path == "/api/scan" else app.start_proposal(data["run"], data["finding"])
                 self.respond(202, json.dumps({"run": run}))
             except (ValueError, KeyError, TypeError, OSError):
                 self.respond(

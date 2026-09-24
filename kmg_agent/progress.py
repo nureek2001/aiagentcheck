@@ -8,6 +8,8 @@ from .reporting import write_json
 class Progress:
     def __init__(self, output, redactor):
         self.output, self.redactor = output, redactor
+        from .telemetry import CheckTelemetry
+        self.telemetry = CheckTelemetry()
         self.state = {
             "stage": "inventory",
             "message": "Сбор файлов",
@@ -25,7 +27,9 @@ class Progress:
         elif message.startswith("Verify "):
             self.state.update(stage="verify", requirement=message.removeprefix("Verify "))
         write_json(self.output / "progress.json", self.state, self.redactor)
+        self.telemetry.send(self.state)
         print(message, flush=True)
 
     def checkpoint(self, report):
+        self.state["usage"] = report["usage"]
         write_json(self.output / "checkpoint.json", report, self.redactor)

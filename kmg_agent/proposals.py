@@ -134,6 +134,7 @@ def propose(repo, report_path, finding_id, output, settings, redactor, client=No
             "summary": response["summary"],
             "risks": response["risks"],
             "tests_to_run": response["tests_to_run"],
+            "edits": response["edits"],
             "changes": [{"path": e["path"], "reason": e["reason"]} for e in response["edits"]],
             "validation": "Exact source matches and Python syntax only; tests and rescan NOT run",
             "applied": False,
