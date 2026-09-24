@@ -12,10 +12,10 @@ concurrency:
 jobs:
   security:
     # Fork PRs have no API secret and fail closed until a trusted review is arranged.
-    uses: nureek2001/aiagentcheck/.github/workflows/reusable-security.yml@bef03d3c47239c8bcdf5756b392d695ed7af289e
+    uses: nureek2001/aiagentcheck/.github/workflows/reusable-security.yml@ed01e9534ff089522a08495cf4c9ce1c98f308c6
     with:
       agent_repository: nureek2001/aiagentcheck
-      agent_ref: bef03d3c47239c8bcdf5756b392d695ed7af289e
+      agent_ref: ed01e9534ff089522a08495cf4c9ce1c98f308c6
       target_repository: ${{ github.repository }}
       target_ref: ${{ github.sha }}
     secrets:
