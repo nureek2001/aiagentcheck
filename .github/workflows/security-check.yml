@@ -1,0 +1,36 @@
+name: Security assessment
+
+on:
+  push:
+  workflow_dispatch:
+    inputs:
+      target_ref:
+        description: 'Target commit SHA or ref (blank uses TARGET_REF/main)'
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: security-demo-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  security:
+    uses: ./.github/workflows/reusable-security.yml
+    with:
+      agent_repository: ${{ github.repository }}
+      agent_ref: ${{ github.sha }}
+      target_repository: ${{ vars.TARGET_REPOSITORY || 'AlmasNUR/KMG-Digital-Hackathon' }}
+      target_ref: ${{ inputs.target_ref || vars.TARGET_REF || 'main' }}
+      model: ${{ vars.DEEPSEEK_MODEL || 'deepseek-flash' }}
+    secrets:
+      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+  delivery-gate:
+    name: Delivery gate (demonstration)
+    needs: security
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Security passed. A real deployment must depend on this security job."

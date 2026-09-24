@@ -1,0 +1,105 @@
+name: Reusable security assessment
+
+on:
+  workflow_call:
+    inputs:
+      agent_repository:
+        type: string
+        required: true
+      agent_ref:
+        description: 'Trusted immutable agent commit SHA'
+        type: string
+        required: true
+      target_repository:
+        type: string
+        required: true
+      target_ref:
+        description: 'Event SHA for product integration; explicit ref for organiser demonstration'
+        type: string
+        required: true
+      model:
+        type: string
+        default: deepseek-flash
+    secrets:
+      DEEPSEEK_API_KEY:
+        required: true
+    outputs:
+      exit_code:
+        value: ${{ jobs.security.outputs.exit_code }}
+
+permissions:
+  contents: read
+
+jobs:
+  security:
+    name: Required security gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      exit_code: ${{ steps.scan.outputs.exit_code }}
+    steps:
+      - name: Validate pinned agent version
+        env:
+          AGENT_REF: ${{ inputs.agent_ref }}
+        run: |
+          if [[ ! "$AGENT_REF" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "Agent ref must be an immutable 40-character commit SHA"
+            exit 2
+          fi
+      - name: Checkout trusted agent
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.agent_repository }}
+          ref: ${{ inputs.agent_ref }}
+          path: agent
+          persist-credentials: false
+      - name: Checkout target snapshot (read only)
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.target_repository }}
+          ref: ${{ inputs.target_ref }}
+          path: target
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+      - name: Install trusted agent only
+        run: python -m pip install -r ./agent/requirements.lock ./agent
+      - name: DeepSeek full project assessment
+        id: scan
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          DEEPSEEK_MODEL: ${{ inputs.model }}
+        shell: bash
+        run: |
+          set +e
+          python -m kmg_agent scan --repo "$GITHUB_WORKSPACE/target" --output "$GITHUB_WORKSPACE/assessment" --env-file "$GITHUB_WORKSPACE/agent/.env" --timeout 1500 --no-cache
+          status=$?
+          echo "exit_code=$status" >> "$GITHUB_OUTPUT"
+          if [ -f "$GITHUB_WORKSPACE/assessment/execution.log" ]; then
+            cat "$GITHUB_WORKSPACE/assessment/execution.log"
+          fi
+          exit "$status"
+      - name: Render dashboard and Actions summary
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/assessment"
+          if [ ! -f "$GITHUB_WORKSPACE/assessment/report.json" ] && [ ! -f "$GITHUB_WORKSPACE/assessment/error.json" ]; then
+            printf '%s\n' '{"exit_code":2,"kind":"ci_setup_or_cancelled","message":"Assessment did not finish; inspect Actions job logs"}' > "$GITHUB_WORKSPACE/assessment/error.json"
+          fi
+          if python -c 'import kmg_agent' 2>/dev/null; then
+            python -m kmg_agent dashboard-export --output "$GITHUB_WORKSPACE/assessment"
+            python -m kmg_agent.ci_summary "$GITHUB_WORKSPACE/assessment"
+          else
+            echo '## Assessment incomplete — agent setup failed' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Save reports even when security fails
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-assessment-${{ github.run_id }}-${{ github.run_attempt }}
+          path: assessment/
+          if-no-files-found: error
+          retention-days: 14

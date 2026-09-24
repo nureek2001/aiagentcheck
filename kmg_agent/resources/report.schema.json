@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "KMG Security Assessment 1.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version","agent_version","commit","source_fingerprint","started_at","finished_at","duration_seconds","result","exit_code","model","findings","additional_findings","rejected_candidates","requirements","coverage","usage","limitations","finding_count","violated_requirements"],
+  "properties": {
+    "schema_version": {"const":"1.0"}, "agent_version":{"type":"string"},
+    "commit":{"type":"string","pattern":"^[0-9a-f]{40,64}$"},
+    "source_fingerprint":{"type":"string","pattern":"^[0-9a-f]{64}$"},
+    "started_at":{"type":"string"}, "finished_at":{"type":"string"},
+    "duration_seconds":{"type":"number","minimum":0},
+    "result":{"enum":["pass","fail","incomplete"]}, "exit_code":{"enum":[0,1,2]},
+    "model":{"type":"string"},
+    "findings":{"type":"array","items":{"$ref":"#/$defs/finding"}},
+    "additional_findings":{"type":"array","items":{"$ref":"#/$defs/finding"}},
+    "rejected_candidates":{"type":"array","items":{"type":"object","required":["requirement","title","verdict","reason"]}},
+    "requirements":{"type":"array","minItems":8,"maxItems":8,"items":{
+      "type":"object","additionalProperties":false,"required":["id","text","status","reason","evidence","finding_count"],
+      "properties":{"id":{"enum":["ИБ-01","ИБ-02","ИБ-03","ИБ-04","ИБ-05","ИБ-06","ИБ-07","ИБ-08"]},
+        "text":{"type":"string"},"status":{"enum":["not_checked","pass","fail","inconclusive"]},
+        "reason":{"type":"string"},"evidence":{"type":"array","items":{"$ref":"#/$defs/evidence"}},
+        "finding_count":{"type":"integer","minimum":0}}
+    }},
+    "coverage":{"type":"object","required":["files_total","files_indexed","chunks_total","chunks_analysed","extra_checked","inventory"],
+      "properties":{"files_total":{"type":"integer"},"files_indexed":{"type":"integer"},"chunks_total":{"type":"integer"},"chunks_analysed":{"type":"integer"},"extra_checked":{"type":"boolean"},"inventory":{"type":"array"}}},
+    "usage":{"type":"object","required":["requests","prompt_tokens","completion_tokens","total_tokens"],"additionalProperties":{"type":"integer","minimum":0}},
+    "limitations":{"type":"array","items":{"type":"string"}},
+    "finding_count":{"type":"integer","minimum":0}, "violated_requirements":{"type":"array","items":{"type":"string"}}
+  },
+  "$defs": {
+    "evidence":{"type":"object","additionalProperties":false,"required":["path","line","end_line","locator","snippet"],
+      "properties":{"path":{"type":"string"},"line":{"type":["integer","null"]},"end_line":{"type":["integer","null"]},"locator":{"type":"string"},"snippet":{"type":"string"}}},
+    "finding":{"type":"object","additionalProperties":false,
+      "required":["id","requirement","requirement_text","title","severity","reason","recommendation","root_cause","evidence","verification"],
+      "properties":{"id":{"type":"string"},"requirement":{"enum":["ИБ-01","ИБ-02","ИБ-03","ИБ-04","ИБ-05","ИБ-06","ИБ-07","ИБ-08","EXTRA"]},
+        "requirement_text":{"type":"string"},"title":{"type":"string"},"severity":{"enum":["critical","high","medium","low"]},
+        "reason":{"type":"string"},"recommendation":{"type":"string"},"root_cause":{"type":"string"},
+        "evidence":{"type":"array","minItems":1,"items":{"$ref":"#/$defs/evidence"}},"verification":{"type":"string"}}}
+  },
+  "allOf":[
+    {"if":{"properties":{"exit_code":{"const":0}}},"then":{"properties":{"result":{"const":"pass"},"findings":{"maxItems":0},"finding_count":{"const":0}}}},
+    {"if":{"properties":{"exit_code":{"const":1}}},"then":{"properties":{"result":{"const":"fail"},"findings":{"minItems":1},"finding_count":{"minimum":1}}}},
+    {"if":{"properties":{"exit_code":{"const":2}}},"then":{"properties":{"result":{"const":"incomplete"}}}}
+  ]
+}
