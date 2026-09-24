@@ -140,3 +140,48 @@ def test_output_limit_subdivides_context_without_omission(repo):
     report = Engine(project, client, progress=lambda _: None).run()
     assert report["exit_code"] == 0
     assert set(client.seen) == set(project.documents)
+
+
+def test_map_accepts_adjacent_supplied_ranges_but_rejects_gaps(repo):
+    project = inspect_project(repo, Redactor())
+    engine = Engine(project, FakeDeepSeek())
+    observation = {"observations": [{"requirement": "ИБ-01", "fact": "wrapper", "evidence": [REF]}]}
+    chunk = {
+        "id": 1,
+        "segments": [
+            {"path": "app.py", "start": 1, "end": 1},
+            {"path": "app.py", "start": 2, "end": 2},
+        ],
+    }
+    engine.validate_map(observation, chunk)
+    chunk["segments"].pop()
+    with pytest.raises(AnalysisError, match="outside"):
+        engine.validate_map(observation, chunk)
+
+
+def test_bad_map_recovery_subdivides_without_silently_skipping_source(repo):
+    class RecoveringClient(FakeDeepSeek):
+        seen = []
+
+        def ask(self, system, payload, schema):
+            if schema == MAP:
+                segments = payload["chunk"]["segments"]
+                if len(segments) > 1:
+                    return {
+                        "observations": [
+                            {
+                                "requirement": "ИБ-01",
+                                "fact": "bad",
+                                "evidence": [{"path": "missing.py", "start": 1, "end": 2}],
+                            }
+                        ]
+                    }
+                self.seen.append(segments[0]["path"])
+                return {"observations": []}
+            return super().ask(system, payload, schema)
+
+    project = inspect_project(repo, Redactor())
+    client = RecoveringClient()
+    report = Engine(project, client, progress=lambda _: None).run()
+    assert report["exit_code"] == 0
+    assert set(client.seen) == set(project.documents)

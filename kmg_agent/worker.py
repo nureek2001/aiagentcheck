@@ -1,7 +1,7 @@
 """Isolated worker: the parent process enforces a hard wall-clock deadline."""
 
 import argparse
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from .client import DeepSeek
@@ -108,6 +108,16 @@ def main():
     finally:
         # Active threads may be completing network calls after one failed: parent deadline still applies.
         if client:
+            write_json(
+                output / "metrics.json",
+                {
+                    "duration_seconds": (datetime.now(timezone.utc) - started).total_seconds(),
+                    "usage": dict(client.usage),
+                    "model": settings.model,
+                    "note": "Usage recorded before worker shutdown; in-flight failed requests may not report tokens",
+                },
+                redactor,
+            )
             try:
                 client.close()
             except RuntimeError:

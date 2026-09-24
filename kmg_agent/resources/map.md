@@ -8,3 +8,6 @@ For normative documents summarize relevant controls and cite ranges; do not repo
 requirements as missing implementations. Focus code observations on executable protection mechanisms.
 Cover all relevant portions of the chunk. Do not claim a violation simply because another chunk is absent.
 For files irrelevant to security, an empty observations list is acceptable. Do not repeat boilerplate.
+Every evidence path and range MUST be inside allowed_evidence_ranges. Use the line-number prefix
+before ':' in the supplied text, not section numbers or numeric values inside that text. DOCX
+references use the supplied paragraph numbers. Never cite unseen files or missing lines.

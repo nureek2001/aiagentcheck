@@ -156,60 +156,69 @@ class Engine:
         for obs in result["observations"]:
             for ref in obs["evidence"]:
                 self.project.evidence(ref)
-                if not any(
-                    s["path"] == ref["path"] and s["start"] <= ref["start"] <= ref["end"] <= s["end"]
-                    for s in chunk["segments"]
-                ):
-                    raise AnalysisError("Map evidence points outside its supplied chunk")
+                # A range may legitimately span adjacent supplied segments of the SAME file.
+                cursor = ref["start"]
+                for segment in sorted(chunk["segments"], key=lambda s: s["start"]):
+                    if segment["path"] == ref["path"] and segment["start"] <= cursor <= segment["end"]:
+                        cursor = segment["end"] + 1
+                if cursor <= ref["end"]:
+                    raise AnalysisError(
+                        f"Map evidence outside chunk {chunk['id']}: {ref['path']}:{ref['start']}-{ref['end']}"
+                    )
+
+    def subdivide_chunk(self, chunk, depth):
+        if depth >= 4:
+            raise AnalysisError(
+                f"Map recovery exhausted for chunk {chunk['id']}; outside or oversized evidence"
+            )
+        segments = chunk["segments"]
+        if len(segments) > 1:
+            middle = len(segments) // 2
+            halves = [segments[:middle], segments[middle:]]
+        else:
+            segment = segments[0]
+            lines = segment["text"].splitlines()
+            if len(lines) < 2:
+                raise AnalysisError(f"Cannot recover evidence outside indivisible chunk {chunk['id']}")
+            middle = len(lines) // 2
+            halves = []
+            for group in (lines[:middle], lines[middle:]):
+                first, last = re.match(r"(\d+):", group[0]), re.match(r"(\d+):", group[-1])
+                if not first or not last:
+                    raise AnalysisError("Cannot safely subdivide numbered source context")
+                halves.append(
+                    [{**segment, "start": int(first[1]), "end": int(last[1]), "text": "\n".join(group)}]
+                )
+        return [
+            observation
+            for half in halves
+            for observation in self.map_chunk({"id": chunk["id"], "segments": half}, depth + 1)
+        ]
 
     def analyse_chunk(self, chunk, depth=0):
         self.check_time()
-        payload = {"requirements": catalogue(), "chunk": chunk}
+        payload = {
+            "requirements": catalogue(),
+            "chunk": chunk,
+            "allowed_evidence_ranges": [
+                {k: segment[k] for k in ("path", "start", "end")} for segment in chunk["segments"]
+            ],
+        }
         for attempt in range(3):
             try:
                 result = self.client.ask(self.system + resource("map.md"), payload, MAP)
             except OutputLimitError:
-                if depth >= 4:
-                    raise
-                segments = chunk["segments"]
-                if len(segments) > 1:
-                    middle = len(segments) // 2
-                    halves = [segments[:middle], segments[middle:]]
-                else:
-                    segment = segments[0]
-                    lines = segment["text"].splitlines()
-                    if len(lines) < 2:
-                        raise
-                    middle = len(lines) // 2
-                    halves = []
-                    for group in (lines[:middle], lines[middle:]):
-                        first, last = re.match(r"(\d+):", group[0]), re.match(r"(\d+):", group[-1])
-                        if not first or not last:
-                            raise AnalysisError("Cannot safely subdivide numbered source context")
-                        halves.append(
-                            [
-                                {
-                                    **segment,
-                                    "start": int(first[1]),
-                                    "end": int(last[1]),
-                                    "text": "\n".join(group),
-                                }
-                            ]
-                        )
-                return [
-                    observation
-                    for half in halves
-                    for observation in self.map_chunk({"id": chunk["id"], "segments": half}, depth + 1)
-                ]
+                return self.subdivide_chunk(chunk, depth)
             try:
                 self.validate_map(result, chunk)
                 return result["observations"]
             except AnalysisError as exc:
                 if attempt == 2:
-                    raise
+                    return self.subdivide_chunk(chunk, depth)
                 payload["correction"] = {
                     "error": str(exc),
-                    "instruction": "Reanalyse the chunk. Return all observations with valid evidence ranges. Use the original numbered lines exactly; do not invent or renumber lines.",
+                    "previous_observations": result["observations"],
+                    "instruction": "Your evidence was invalid. Reanalyse using allowed_evidence_ranges. Line numbers are the numeric PREFIX before the colon in source text, not numbers inside the document. Cite only ranges fully present in this chunk. For DOCX use the supplied paragraph numbers. Remove observations unsupported by this chunk; never invent or renumber lines.",
                 }
         raise AnalysisError("Evidence repair exhausted")
 
@@ -230,6 +239,14 @@ class Engine:
             "observations": observations,
             "source": [],
         }
+        if rid == "EXTRA":
+            payload["already_reported_mandatory_findings"] = [
+                {k: f[k] for k in ("requirement", "title", "root_cause")} for f in self.report["findings"]
+            ]
+            payload["scope_note"] = (
+                "Report only additional specification issues. Do not repeat mandatory findings "
+                "already listed above under EXTRA. An issue with the same cause and operation is a duplicate."
+            )
         # Keep shared enforcement bodies available even when a map observation cites only a call site.
         # This is based on common component names, not pre-labelled vulnerabilities or target paths.
         component_names = {
