@@ -36,8 +36,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python manage.py test portal --noinput
   security:
-    # Push already audits same-repository branches; avoid a second paid scan when opening a PR.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    # PR merge snapshots are audited separately; a skipped scan must never permit merge.
     # Fork PRs have no API secret and fail closed until a trusted review is arranged.
     uses: nureek2001/aiagentcheck/.github/workflows/reusable-security.yml@f01bb3e629498d92257cf441b12e81b52e401946
     with:
@@ -47,8 +46,20 @@ jobs:
       target_ref: ${{ github.sha }}
     secrets:
       DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
-  delivery:
+  merge-gate:
+    name: Security merge gate
+    if: always()
     needs: [security, tests]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require completed successful checks
+        env:
+          SECURITY_RESULT: ${{ needs.security.result }}
+          TEST_RESULT: ${{ needs.tests.result }}
+        run: |
+          test "$SECURITY_RESULT" = success && test "$TEST_RESULT" = success
+  delivery:
+    needs: [merge-gate]
     runs-on: ubuntu-latest
     steps:
       - run: echo 'Replace with your authorised deployment steps.'
