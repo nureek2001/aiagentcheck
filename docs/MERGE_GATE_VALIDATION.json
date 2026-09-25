@@ -1,0 +1,31 @@
+{
+  "repository": "nureek2001/helpdesk-demo",
+  "branch": "main",
+  "required_checks": {
+    "url": "https://api.github.com/repos/nureek2001/helpdesk-demo/branches/main/protection/required_status_checks",
+    "strict": true,
+    "contexts": [
+      "Security merge gate"
+    ],
+    "contexts_url": "https://api.github.com/repos/nureek2001/helpdesk-demo/branches/main/protection/required_status_checks/contexts",
+    "checks": [
+      {
+        "context": "Security merge gate",
+        "app_id": 15368
+      }
+    ]
+  },
+  "enforce_admins": true,
+  "allow_force_pushes": false,
+  "allow_deletions": false,
+  "pr_validation": {
+    "html_url": "https://github.com/nureek2001/helpdesk-demo/pull/1",
+    "state": "open",
+    "draft": false,
+    "mergeable": true,
+    "mergeable_state": "blocked",
+    "merged": false
+  },
+  "validation_pr_closed_without_merge": true,
+  "gate_matrix_cases": 16
+}

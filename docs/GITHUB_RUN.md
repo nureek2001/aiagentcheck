@@ -1,3 +1,5 @@
+> Историческая запись. Актуальный статус сдачи — [SUBMISSION.md](SUBMISSION.md). Числа ниже относятся к указанному в документе запуску.
+
 # Проверенный запуск GitHub Actions
 
 Репозиторий: https://github.com/nureek2001/aiagentcheck
