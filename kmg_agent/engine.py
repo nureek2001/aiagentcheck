@@ -281,6 +281,34 @@ class Engine:
                 }
                 self.progress(f"Review {payload['requirement']['id']} — исправление доказательств {corrections}/2")
 
+    def verification_context(self, payload):
+        """Select optional context explicitly; preserve the finding and all its evidence."""
+        optional = ("shared_components", "retrieved_source", "related_observations")
+        selected = {k: v for k, v in payload.items() if k not in optional}
+        selected.update({k: [] for k in optional})
+        selected["context_selection"] = {
+            "omitted_items": 0,
+            "note": "Optional context selected within budget. All file ranges remain listed; "
+                    "request missing source via needs_context. Omission is not proof of absence.",
+        }
+        limit = self.client.settings.context_chars - 12000
+        if len(dump_context(selected)) > limit:
+            raise AnalysisError("Finding evidence itself exceeds verification context budget")
+        seen = set()
+        for group in optional:
+            for item in payload[group]:
+                encoded = dump_context(item)
+                if group != "related_observations" and encoded in seen:
+                    continue
+                candidate = {**selected, group: selected[group] + [item]}
+                if len(dump_context(candidate)) <= limit:
+                    selected[group].append(item)
+                    if group != "related_observations":
+                        seen.add(encoded)
+                else:
+                    selected["context_selection"]["omitted_items"] += 1
+        return selected
+
     def request_verification(self, payload):
         """Let the verifier retrieve missing evidence without forcing a verdict."""
         corrections, retrievals = 0, 0
@@ -409,7 +437,7 @@ class Engine:
                 "retrieved_source": payload["source"],
                 "file_ranges": payload["file_ranges"],
             }
-            verification = self.request_verification(verification_payload)
+            verification = self.request_verification(self.verification_context(verification_payload))
             if verification["verdict"] != "confirmed":
                 self.report["rejected_candidates"].append(
                     {

@@ -167,3 +167,30 @@ def test_verifier_retrieves_source_or_stays_uncertain(repo, mode):
     result = engine.request_verification({'requirement': {'id': 'ИБ-01'}, 'retrieved_source': []})
     assert result['verdict'] == ('rejected' if mode == 'retrieve' else 'uncertain')
     assert client.calls == (2 if mode == 'retrieve' else 3)
+
+
+def test_verification_context_preserves_primary_evidence_and_discloses_omissions(repo):
+    client = FakeDeepSeek()
+    client.settings = SimpleNamespace(**{**vars(client.settings), "context_chars": 25000})
+    engine = Engine(inspect_project(repo, Redactor()), client)
+    primary = engine.project.context([REF])
+    payload = {"finding": {"title": "candidate"}, "finding_source": primary,
+               "file_ranges": [REF], "topology": {}, "requirement": {"id": "ИБ-01"},
+               "shared_components": [{"snippet": "x" * 10000}],
+               "retrieved_source": [{"snippet": "y" * 10000}], "related_observations": []}
+    selected = engine.verification_context(payload)
+    assert selected["finding_source"] == primary
+    assert selected["file_ranges"] == [REF]
+    assert selected["context_selection"]["omitted_items"] == 1
+    assert len(json.dumps(selected, ensure_ascii=False)) < 13000
+
+
+def test_verification_context_never_truncates_oversized_finding(repo):
+    from kmg_agent.errors import AnalysisError
+    client = FakeDeepSeek()
+    client.settings = SimpleNamespace(**{**vars(client.settings), "context_chars": 13000})
+    engine = Engine(inspect_project(repo, Redactor()), client)
+    with pytest.raises(AnalysisError, match="Finding evidence itself"):
+        engine.verification_context({"finding_source": [{"snippet": "x" * 2000}],
+                                     "shared_components": [], "retrieved_source": [],
+                                     "related_observations": []})
