@@ -281,6 +281,38 @@ class Engine:
                 }
                 self.progress(f"Review {payload['requirement']['id']} — исправление доказательств {corrections}/2")
 
+    def request_verification(self, payload):
+        """Let the verifier retrieve missing evidence without forcing a verdict."""
+        corrections, retrievals = 0, 0
+        while True:
+            self.check_time()
+            result = self.client.ask(self.system + resource("verify.md"), payload, VERIFY)
+            try:
+                requests = result.get("requests", [])
+                if result["verdict"] != "needs_context":
+                    if requests:
+                        raise AnalysisError("Final verification has unresolved source requests")
+                    return result
+                if not requests:
+                    raise AnalysisError("Verifier requested context without ranges")
+                requested = self.project.context(requests)
+                if retrievals >= 2:
+                    return {"verdict": "uncertain", "reason": "Verifier retrieval budget exhausted. " + result["reason"]}
+                merged = {dump_context(e): e for e in payload["retrieved_source"] + requested}
+                candidate = {**payload, "retrieved_source": list(merged.values())}
+                if len(dump_context(candidate)) > self.client.settings.context_chars - 12000:
+                    raise AnalysisError("Verifier context budget exceeded; request narrower ranges")
+                payload.update(candidate)
+                retrievals += 1
+                self.progress(f"Verify {payload['requirement']['id']} — дополнительный контекст {retrievals}/2")
+            except AnalysisError as exc:
+                if corrections >= 2:
+                    return {"verdict": "uncertain", "reason": "Verifier evidence unavailable: " + str(exc)}
+                corrections += 1
+                payload["correction"] = {"error": str(exc), "instruction":
+                    "Request valid ranges from file_ranges. Never invent or clamp evidence; "
+                    "return uncertain if required facts are unavailable."}
+
     def review(self, requirement, recovery=0, feedback=None):
         rid = requirement["id"]
         observations = [o for o in self.observations if o["requirement"] == rid]
@@ -377,11 +409,7 @@ class Engine:
                 "retrieved_source": payload["source"],
                 "file_ranges": payload["file_ranges"],
             }
-            verification = self.client.ask(
-                self.system + resource("verify.md"),
-                verification_payload,
-                VERIFY,
-            )
+            verification = self.request_verification(verification_payload)
             if verification["verdict"] != "confirmed":
                 self.report["rejected_candidates"].append(
                     {

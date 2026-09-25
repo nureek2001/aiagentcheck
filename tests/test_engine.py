@@ -146,3 +146,24 @@ def test_reassessment_is_bounded_and_never_forces_a_pass(repo):
     assert len(report["rejected_candidates"]) == 3
     assert report["requirements"][0]["status"] == "inconclusive"
     assert decision(report) == 2
+
+@pytest.mark.parametrize('mode', ['retrieve', 'invalid', 'exhausted'])
+def test_verifier_retrieves_source_or_stays_uncertain(repo, mode):
+    class Client(FakeDeepSeek):
+        calls = 0
+
+        def ask(self, system, payload, schema):
+            assert schema == VERIFY
+            self.calls += 1
+            if mode == 'retrieve' and self.calls == 2:
+                assert payload['retrieved_source'][0]['path'] == 'app.py'
+                assert 'administrator' in payload['retrieved_source'][0]['snippet']
+                return {'verdict': 'rejected', 'reason': 'Requested source contains enforcement.'}
+            ref = {**REF, 'end': 999} if mode == 'invalid' else REF
+            return {'verdict': 'needs_context', 'reason': 'Need original enforcement.', 'requests': [ref]}
+
+    client = Client()
+    engine = Engine(inspect_project(repo, Redactor()), client, progress=lambda _: None)
+    result = engine.request_verification({'requirement': {'id': 'ИБ-01'}, 'retrieved_source': []})
+    assert result['verdict'] == ('rejected' if mode == 'retrieve' else 'uncertain')
+    assert client.calls == (2 if mode == 'retrieve' else 3)

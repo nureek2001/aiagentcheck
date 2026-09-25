@@ -13,3 +13,10 @@ If context is insufficient, identify the precise missing paths, configuration or
 in your concise reason so the reviewer can retrieve it. Do not treat integrity detection as proof
 that users cannot modify or delete stored records. Reason about read, write, delete and key access
 separately; a permission allowing read is not evidence of key confidentiality.
+
+When a concrete source file or call chain is missing, return verdict=needs_context
+and requests=[{path,start,end}] using file_ranges. The agent retrieves these from
+the immutable snapshot. Up to two retrieval rounds are available. Do not merely
+list retrievable missing files in a final uncertain reason before requesting them.
+Final verdicts must omit requests or use requests=[]. If external deployment facts
+are indispensable, retain uncertain; retrieval is not permission to force confirmation.

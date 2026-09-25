@@ -59,5 +59,5 @@ VERIFY = {
     "type": "object",
     "additionalProperties": False,
     "required": ["verdict", "reason"],
-    "properties": {"verdict": {"enum": ["confirmed", "rejected", "uncertain"]}, "reason": TEXT},
+    "properties": {"verdict": {"enum": ["confirmed", "rejected", "uncertain", "needs_context"]}, "reason": TEXT, "requests": {"type": "array", "items": REF, "maxItems": 16}},
 }
